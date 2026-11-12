@@ -10,21 +10,72 @@ import os
 import random
 import numpy as np #install numpy
 
-all_data = []
-training_set = []
-test_set = []
+TRAIN_RATIO = 0.80
+SEED = 1
 
 
 def minkowski(A, B, p):
     return np.power(np.sum(np.abs(np.array(A) - np.array(B)) ** p), 1/p)
     #credit: https://www.geeksforgeeks.org/maths/minskowski-distance/
 
+
+def load_data(path):
+    # each row becomes (features, label, row_id); row_id is the line number in the file
+    data = []
+    with open(path, "r") as f:
+        reader = csv.reader(f)
+        for line_no, row in enumerate(reader, start=1):
+            if len(row) == 0:      # skip blank lines
+                continue
+            features = [float(val) for val in row[0:4]]
+            label = row[4]
+            data.append((features, label, line_no))
+    return data
+
+
+def stratified_split(data, train_ratio, seed):
+    # the file is sorted by class, so we shuffle each class separately
+    # and take the same percentage from each one (keeps the class ratio in both sets)
+    random.seed(seed)
+    by_class = {}
+    for item in data:
+        by_class.setdefault(item[1], []).append(item)
+
+    train, test = [], []
+    for label in sorted(by_class):
+        items = by_class[label]
+        random.shuffle(items)
+        cut = round(len(items) * train_ratio)
+        train.extend(items[:cut])
+        test.extend(items[cut:])
+
+    random.shuffle(train)
+    random.shuffle(test)
+    return train, test
+
+
+def fit_min_max(train):
+    # min and max of each feature, computed from the TRAINING set only
+    cols = np.array([item[0] for item in train])
+    return cols.min(axis=0), cols.max(axis=0)
+
+
+def scale(data, mins, maxs):
+    # min-max normalization: (x - min) / (max - min), result is between 0 and 1
+    ranges = np.where(maxs - mins == 0, 1, maxs - mins)
+    scaled = []
+    for features, label, row_id in data:
+        new_features = ((np.array(features) - mins) / ranges).tolist()
+        scaled.append((new_features, label, row_id))
+    return scaled
+
+
 def knn(k, p, test_features, train):
     distances = []
     zero = 0
     one = 0
 
-    for train_features, train_label in train:
+    for train_features, train_label, _ in train:
         distance = minkowski(test_features, train_features, p)
         distances.append((distance, train_label))
 
@@ -44,72 +95,78 @@ def knn(k, p, test_features, train):
         return '1'
 
 
-base_dir = os.path.dirname(os.path.abspath('_file_'))
+def evaluate(actual, predicted):
+    # class '1' is treated as the positive class
+    tp = tn = fp = fn = 0
+    for a, pr in zip(actual, predicted):
+        if a == '1' and pr == '1':
+            tp += 1
+        elif a == '0' and pr == '0':
+            tn += 1
+        elif a == '0' and pr == '1':
+            fp += 1
+        else:
+            fn += 1
+
+    total = tp + tn + fp + fn
+    accuracy = (tp + tn) / total
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    return tp, tn, fp, fn, accuracy, precision, recall, f1
+
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
 data_path = os.path.join(base_dir, "..", "dataset", "data_banknote_authentication.txt")
 
-# the banknote file has no header row, 4 features, and the label in column 5
-with open(data_path, "r") as i:
-    data = csv.reader(i)
+all_data = load_data(data_path)
+training_set, test_set = stratified_split(all_data, TRAIN_RATIO, SEED)
 
-    for j in data:
-        if len(j) == 0:      # skip blank lines
-            continue
-        features = [float(val) for val in j[0:4]]
-        label = j[4]
-
-        all_data.append((features, label))
-
-
-# the file is sorted by class (all 0s first, then all 1s), so shuffle before splitting
-random.seed(1)
-random.shuffle(all_data)
-
-split = int(len(all_data) * 0.70)
-
-for i in range(split):
-    training_set.append(all_data[i])
-
-for i in range(split, len(all_data)):
-    test_set.append(all_data[i])
-
+mins, maxs = fit_min_max(training_set)
+training_set = scale(training_set, mins, maxs)
+test_set = scale(test_set, mins, maxs)
 
 k = int(input("Enter k: "))
 p = int(input("Enter p: "))
 
-final_test = []
-predictions = []
-
 print("K-Nearest Neighbors for Banknote Authentication Data")
+print("JMVPabiz, 2023-07564")
+
 print(f"Dataset size: {len(all_data)}")
 print(f"Train size: {len(training_set)}")
 print(f"Test size: {len(test_set)}")
+print(f"Split: stratified {int(TRAIN_RATIO * 100)}/{int((1 - TRAIN_RATIO) * 100)}, seed = {SEED}")
+print("Preprocessing: min-max normalization (fitted on training set)")
 print(f"k = {k}, p = {p}")
 
-for test_item in test_set:
+actual = []
+predictions = []
+final_test = []
 
-    test_set_features = test_item[0]
-    actual_label = test_item[1]
-
-    prediction = knn(k, p, test_set_features, training_set)
+for features, label, row_id in test_set:
+    prediction = knn(k, p, features, training_set)
+    actual.append(label)
     predictions.append(prediction)
+    final_test.append((row_id, features, label, prediction))
 
-    final_test.append((test_set_features, actual_label, prediction))
-
-headers = ["Test Index", "Variance", "Skewness", "Curtosis", "Entropy", "Actual", "Predicted"]
+# Every cell is padded to width 10, then a tab follows, so all columns line up.
+headers = ["Row No.", "Variance", "Skewness", "Curtosis", "Entropy", "Actual", "Predicted"]
 print("\t".join(f"{h:<10}" for h in headers))
 print("-" * 120)
 
-index = 1
-for features, actual_label, prediction in final_test:
-    cells = [str(index)] + [f"{val:.5f}" for val in features] + [actual_label, prediction]
+for row_id, features, label, prediction in final_test:
+    cells = [str(row_id)] + [f"{val:.5f}" for val in features] + [label, prediction]
     print("\t".join(f"{c:<10}" for c in cells))
-    index = index + 1
 
-correct = 0
-for i in range(len(test_set)):
-    if test_set[i][1] == predictions[i]:
-        correct = correct + 1
+tp, tn, fp, fn, accuracy, precision, recall, f1 = evaluate(actual, predictions)
 
-percent = (correct / len(test_set)) * 100
-
-print(f"Accuracy: {percent:.2f}%")
+print()
+print("Confusion Matrix")
+print("\t".join(f"{h:<14}" for h in ["", "Predicted 0", "Predicted 1"]))
+print("\t".join(f"{c:<14}" for c in ["Actual 0", str(tn), str(fp)]))
+print("\t".join(f"{c:<14}" for c in ["Actual 1", str(fn), str(tp)]))
+print()
+print(f"Accuracy:  {accuracy * 100:.2f}%")
+print(f"Precision: {precision * 100:.2f}%")
+print(f"Recall:    {recall * 100:.2f}%")
+print(f"F1 Score:  {f1 * 100:.2f}%")
