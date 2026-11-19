@@ -130,7 +130,6 @@ k = int(input("Enter k: "))
 p = int(input("Enter p: "))
 
 print("K-Nearest Neighbors for Banknote Authentication Data")
-print("JMVPabiz, 2023-07564")
 
 print(f"Dataset size: {len(all_data)}")
 print(f"Train size: {len(training_set)}")
